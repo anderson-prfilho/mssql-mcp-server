@@ -10,6 +10,11 @@ import { createJsonRpcError } from './errors.mjs';
 export function registerDatabaseResources(server) {
     logger.info('Registering database resources');
     
+    // Ensure _resources exists
+    if (!server._resources) {
+        server._resources = {};
+    }
+
     // Wrap the original resource method to add logging and error handling
     const originalResource = server.resource.bind(server);
     server.resource = function(name, uriPattern, handler) {
@@ -36,6 +41,15 @@ export function registerDatabaseResources(server) {
             }
         };
         
+        // Store the resource for direct access
+        server._resources[uriPattern] = {
+            name: name,
+            uriPattern: uriPattern,
+            handler: wrappedHandler
+        };
+        
+        logger.info(`Registered resource: ${name} at ${uriPattern}`);
+        
         return originalResource(name, uriPattern, wrappedHandler);
     };
     
@@ -46,8 +60,6 @@ export function registerDatabaseResources(server) {
     registerFunctionsListResource(server);
     registerViewsListResource(server);
     registerIndexesListResource(server);
-    registerAiSchemaResource(server);
-    registerDiscoveryResource(server);
     
     logger.info('Database resources registered successfully');
 }
@@ -66,16 +78,20 @@ function registerDatabaseSchemaResource(server) {
                 
                 const result = await executeQuery(`
                     SELECT 
-                        TABLE_NAME,
-                        COLUMN_NAME,
-                        DATA_TYPE,
-                        IS_NULLABLE,
-                        CHARACTER_MAXIMUM_LENGTH,
-                        COLUMN_DEFAULT
+                        c.TABLE_NAME,
+                        c.COLUMN_NAME,
+                        c.DATA_TYPE,
+                        c.IS_NULLABLE,
+                        c.CHARACTER_MAXIMUM_LENGTH,
+                        c.COLUMN_DEFAULT
                     FROM 
-                        INFORMATION_SCHEMA.COLUMNS
+                        INFORMATION_SCHEMA.COLUMNS c
+                    INNER JOIN
+                        INFORMATION_SCHEMA.TABLES t ON c.TABLE_NAME = t.TABLE_NAME AND c.TABLE_SCHEMA = t.TABLE_SCHEMA
+                    WHERE
+                        t.TABLE_TYPE = 'BASE TABLE'
                     ORDER BY 
-                        TABLE_NAME, ORDINAL_POSITION
+                        c.TABLE_NAME, c.ORDINAL_POSITION
                 `);
                 
                 // Format schema data into human-readable text
@@ -420,233 +436,6 @@ function registerIndexesListResource(server) {
                 };
             } catch (err) {
                 logger.error(`Error retrieving indexes: ${err.message}`);
-                throw err;
-            }
-        }
-    );
-}
-
-/**
- * Register the AI schema resource
- * @param {object} server - MCP server instance
- */
-function registerAiSchemaResource(server) {
-    server.resource(
-        "ai-schema",
-        "ai-schema://database",
-        async (uri) => {
-            try {
-                logger.info('Generating AI-friendly database schema...');
-                
-                // Get tables
-                const tablesResult = await executeQuery(`
-                    SELECT 
-                        TABLE_SCHEMA,
-                        TABLE_NAME
-                    FROM 
-                        INFORMATION_SCHEMA.TABLES
-                    WHERE
-                        TABLE_TYPE = 'BASE TABLE'
-                    ORDER BY 
-                        TABLE_SCHEMA, TABLE_NAME
-                `);
-                
-                // Generate a comprehensive schema description for AI
-                let aiSchemaText = '# AI Assistant Database Guide\n\n';
-                aiSchemaText += 'This is a guide for AI assistants to interact with this SQL Server database.\n\n';
-                
-                // Add tables section
-                aiSchemaText += '## Available Tables\n\n';
-                
-                // Group by schema
-                const tablesBySchema = {};
-                tablesResult.recordset.forEach(table => {
-                    if (!tablesBySchema[table.TABLE_SCHEMA]) {
-                        tablesBySchema[table.TABLE_SCHEMA] = [];
-                    }
-                    tablesBySchema[table.TABLE_SCHEMA].push(table.TABLE_NAME);
-                });
-                
-                // Add tables by schema
-                for (const [schema, tables] of Object.entries(tablesBySchema)) {
-                    aiSchemaText += `### ${schema} Schema\n\n`;
-                    aiSchemaText += '```\n';
-                    tables.forEach(table => {
-                        aiSchemaText += `${table}\n`;
-                    });
-                    aiSchemaText += '```\n\n';
-                }
-                
-                // Add usage examples
-                aiSchemaText += '## MCP Usage Examples\n\n';
-                
-                aiSchemaText += '### Listing Tables\n';
-                aiSchemaText += 'To list tables, use the `tables://list` resource:\n';
-                aiSchemaText += '```javascript\n';
-                aiSchemaText += 'mcp__resources_read("tables://list")\n';
-                aiSchemaText += '```\n\n';
-                
-                aiSchemaText += '### Executing Queries\n';
-                aiSchemaText += 'To execute a SQL query, use the `execute-query` tool:\n';
-                aiSchemaText += '```javascript\n';
-                aiSchemaText += 'mcp__execute_query({ sql: "SELECT TOP 100 * FROM [table_name]" })\n';
-                aiSchemaText += '```\n\n';
-                
-                aiSchemaText += '### Getting Table Details\n';
-                aiSchemaText += 'To get details about a specific table, use the `table-details` tool:\n';
-                aiSchemaText += '```javascript\n';
-                aiSchemaText += 'mcp__table_details({ tableName: "table_name" })\n';
-                aiSchemaText += '```\n\n';
-                
-                aiSchemaText += '## Best Practices for AI Assistants\n\n';
-                aiSchemaText += '1. Always check table existence before querying\n';
-                aiSchemaText += '2. Use `SELECT TOP N` for safety when exploring large tables\n';
-                aiSchemaText += '3. Explore table schema with `table-details` before constructing complex queries\n';
-                aiSchemaText += '4. Use `discover-database()` to get a comprehensive overview\n';
-                
-                logger.info('AI-friendly schema generated');
-                
-                return {
-                    contents: [{
-                        uri: uri.href,
-                        text: aiSchemaText
-                    }]
-                };
-            } catch (err) {
-                logger.error(`Error generating AI schema: ${err.message}`);
-                throw err;
-            }
-        }
-    );
-}
-
-/**
- * Register the discovery resource
- * @param {object} server - MCP server instance
- */
-function registerDiscoveryResource(server) {
-    server.resource(
-        "discovery",
-        "discovery://tables",
-        async (uri) => {
-            try {
-                logger.info('Generating table discovery guide...');
-                
-                // Get tables with sample data for better understanding
-                const tablesResult = await executeQuery(`
-                    SELECT 
-                        TABLE_SCHEMA,
-                        TABLE_NAME,
-                        TABLE_TYPE
-                    FROM 
-                        INFORMATION_SCHEMA.TABLES
-                    WHERE
-                        TABLE_TYPE = 'BASE TABLE'
-                    ORDER BY 
-                        TABLE_SCHEMA, TABLE_NAME
-                `);
-                
-                // Get a sample of common tables with row counts for context
-                const sampleTablesWithRowCounts = [];
-                
-                // Get row counts for the first 5 tables (limited to avoid performance issues)
-                for (let i = 0; i < Math.min(5, tablesResult.recordset.length); i++) {
-                    const tableSchema = tablesResult.recordset[i].TABLE_SCHEMA;
-                    const tableName = tablesResult.recordset[i].TABLE_NAME;
-                    
-                    try {
-                        const countResult = await executeQuery(`
-                            SELECT 
-                                COUNT(*) AS TotalRows
-                            FROM 
-                                [${tableSchema}].[${tableName}]
-                        `, {
-                            schemaName: tableSchema,
-                            tableName: tableName
-                        });
-                        
-                        const rowCount = countResult.recordset[0].TotalRows || 0;
-                        sampleTablesWithRowCounts.push({ 
-                            schema: tableSchema, 
-                            name: tableName, 
-                            rowCount 
-                        });
-                    } catch (err) {
-                        logger.error(`Error getting row count for ${tableSchema}.${tableName}: ${err.message}`);
-                        sampleTablesWithRowCounts.push({ 
-                            schema: tableSchema, 
-                            name: tableName, 
-                            rowCount: "Unknown" 
-                        });
-                    }
-                }
-                
-                // Generate a comprehensive table discovery guide
-                let discoveryText = '# Table Discovery Guide\n\n';
-                discoveryText += 'This guide will help you discover and explore tables in this SQL Server database.\n\n';
-                
-                // Step 1: List all tables
-                discoveryText += '## Step 1: List All Tables\n\n';
-                discoveryText += 'To get a complete list of all tables in the database, use this command:\n\n';
-                discoveryText += '```javascript\n';
-                discoveryText += 'mcp__execute_query({ sql: "SELECT TOP 100 TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = \'BASE TABLE\' ORDER BY TABLE_SCHEMA, TABLE_NAME" })\n';
-                discoveryText += '```\n\n';
-                
-                // Step 2: Explore table structure
-                discoveryText += '## Step 2: Explore Table Structure\n\n';
-                discoveryText += 'Once you have table names, explore their structure using either table-details or SQL:\n\n';
-                discoveryText += '```javascript\n';
-                discoveryText += '// Option 1: Using the dedicated tool\n';
-                if (sampleTablesWithRowCounts.length > 0) {
-                    discoveryText += `mcp__table_details({ tableName: "${sampleTablesWithRowCounts[0].name}" })\n\n`;
-                } else {
-                    discoveryText += `mcp__table_details({ tableName: "example_table_name" })\n\n`;
-                }
-                discoveryText += '// Option 2: Using SQL query\n';
-                discoveryText += 'mcp__execute_query({ sql: "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = \'example_table_name\' ORDER BY ORDINAL_POSITION" })\n';
-                discoveryText += '```\n\n';
-                
-                // Step 3: Query with example
-                discoveryText += '## Step 3: Execute Safe Queries\n\n';
-                discoveryText += 'After discovering tables and their structure, execute queries with TOP clause for safety:\n\n';
-                discoveryText += '```javascript\n';
-                discoveryText += `// Example query for a sample table\n`;
-                if (sampleTablesWithRowCounts.length > 0) {
-                    discoveryText += `mcp__execute_query({ sql: "SELECT TOP 100 * FROM [${sampleTablesWithRowCounts[0].schema}].[${sampleTablesWithRowCounts[0].name}]" })\n`;
-                } else {
-                    discoveryText += `mcp__execute_query({ sql: "SELECT TOP 100 * FROM [schema].[table_name]" })\n`;
-                }
-                discoveryText += '```\n\n';
-                
-                // Sample information about tables
-                discoveryText += '## Sample Tables Information\n\n';
-                discoveryText += 'Here are some tables in this database with approximate row counts:\n\n';
-                discoveryText += '| Schema | Table Name | Approximate Row Count |\n';
-                discoveryText += '|--------|------------|----------------------|\n';
-                
-                sampleTablesWithRowCounts.forEach(table => {
-                    discoveryText += `| ${table.schema} | ${table.name} | ${table.rowCount} |\n`;
-                });
-                
-                discoveryText += '\n## Total Tables Count\n\n';
-                discoveryText += `This database contains ${tablesResult.recordset.length} tables in total.\n\n`;
-                
-                discoveryText += '## Best Practices for Table Discovery\n\n';
-                discoveryText += '1. Always start with listing available tables\n';
-                discoveryText += '2. Examine table structure before querying\n';
-                discoveryText += '3. Use TOP clauses for initial queries to avoid performance issues\n';
-                discoveryText += '4. For large tables, filter with WHERE clauses when possible\n';
-                
-                logger.info('Table discovery guide generated');
-                
-                return {
-                    contents: [{
-                        uri: uri.href,
-                        text: discoveryText
-                    }]
-                };
-            } catch (err) {
-                logger.error(`Error generating table discovery guide: ${err.message}`);
                 throw err;
             }
         }

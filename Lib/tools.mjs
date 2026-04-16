@@ -38,24 +38,15 @@ function registerDatabaseTools(server) {
         server._tools = {};
     }
     
-    // Helper function to register tools with all name variants
     const registerWithAllAliases = (name, schema, handler) => {
         try {
-            // Register with mcp_ prefix
             server.tool(`mcp_${name}`, schema, handler);
-            
-            // Register with mcp_SQL_ prefix for Claude client compatibility
             server.tool(`mcp_SQL_${name}`, schema, handler);
-            
-            // Make sure server._tools exists
-            if (!server._tools) {
-                server._tools = {};
-            }
-            
-            // Also add directly to server._tools (since tool registration is not working)
+
+            if (!server._tools) server._tools = {};
             server._tools[`mcp_${name}`] = { schema, handler };
             server._tools[`mcp_SQL_${name}`] = { schema, handler };
-            
+
             logger.info(`Registered tool: mcp_${name} and mcp_SQL_${name}`);
         } catch (err) {
             logger.error(`Failed to register tool ${name}: ${err.message}`);
@@ -72,8 +63,6 @@ function registerDatabaseTools(server) {
     registerDiscoverTablesTool(server, registerWithAllAliases);
     registerDiscoverDatabaseTool(server, registerWithAllAliases);
     registerGetQueryResultsTool(server, registerWithAllAliases);
-    registerDiscoverTool(server, registerWithAllAliases);
-    registerCursorGuideTool(server, registerWithAllAliases);
     registerPaginatedQueryTool(server, registerWithAllAliases);
     registerQueryStreamerTool(server, registerWithAllAliases);
     
@@ -158,10 +147,6 @@ function registerExecuteQueryTool(server, registerWithAllAliases) {
                     }
             }
             
-            // Generate UUID for tracking
-            const uuid = crypto.randomUUID();
-            
-            // Return both the text response AND the actual data in MCP format
                 return {
                     content: [{
                         type: "text",
@@ -171,8 +156,6 @@ function registerExecuteQueryTool(server, registerWithAllAliases) {
                     rowCount: rowCount,
                     results: result.recordset || [],
                     metadata: {
-                        uuid: uuid,
-                        pagination: null,
                         totalCount: totalCount,
                         executionTimeMs: executionTime
                         }
@@ -501,13 +484,13 @@ function registerFunctionDetailsTool(server, registerWithAlias) {
                 markdown += '\n## Usage Example\n\n';
                 markdown += '```sql\n';
                 
-                // Simple scalar function example
-                if (paramResult.recordset.length === 0) {
+                const inParams = paramResult.recordset.filter(p => p.PARAMETER_MODE === 'IN');
+                if (inParams.length === 0) {
                     markdown += `-- Call scalar function\n`;
                     markdown += `SELECT dbo.${sanitizedFuncName}() AS Result\n`;
                 } else {
                     markdown += `-- Call function with parameters\n`;
-                    markdown += `SELECT dbo.${sanitizedFuncName}(${paramResult.recordset.map(() => '?').join(', ')}) AS Result\n`;
+                    markdown += `SELECT dbo.${sanitizedFuncName}(${inParams.map(p => p.PARAMETER_NAME || '?').join(', ')}) AS Result\n`;
                 }
                 
                 markdown += '```\n';
@@ -1007,6 +990,12 @@ function registerDiscoverDatabaseTool(server, registerWithAlias) {
             try {
                 let markdown = `# SQL Server Database Discovery\n\n`;
                 
+                // Initialize result variables
+                let tablesResult = { recordset: [] };
+                let viewsResult = { recordset: [] };
+                let procsResult = { recordset: [] };
+                let funcsResult = { recordset: [] };
+                
                 // Discover tables
                 if (type === 'tables' || type === 'all') {
                     const tablesQuery = `
@@ -1021,7 +1010,7 @@ function registerDiscoverDatabaseTool(server, registerWithAlias) {
                             TABLE_SCHEMA, TABLE_NAME
                     `;
                     
-                    const tablesResult = await executeQuery(tablesQuery);
+                    tablesResult = await executeQuery(tablesQuery);
                     
                     markdown += `## Tables (${tablesResult.recordset.length})\n\n`;
                     
@@ -1055,7 +1044,7 @@ function registerDiscoverDatabaseTool(server, registerWithAlias) {
                             TABLE_SCHEMA, TABLE_NAME
                     `;
                     
-                    const viewsResult = await executeQuery(viewsQuery);
+                    viewsResult = await executeQuery(viewsQuery);
                     
                     markdown += `## Views (${viewsResult.recordset.length})\n\n`;
                     
@@ -1093,7 +1082,7 @@ function registerDiscoverDatabaseTool(server, registerWithAlias) {
                             ROUTINE_SCHEMA, ROUTINE_NAME
                     `;
                     
-                    const procsResult = await executeQuery(procsQuery);
+                    procsResult = await executeQuery(procsQuery);
                     
                     markdown += `## Stored Procedures (${procsResult.recordset.length})\n\n`;
                     
@@ -1131,7 +1120,7 @@ function registerDiscoverDatabaseTool(server, registerWithAlias) {
                             ROUTINE_SCHEMA, ROUTINE_NAME
                     `;
                     
-                    const funcsResult = await executeQuery(funcsQuery);
+                    funcsResult = await executeQuery(funcsQuery);
                     
                     markdown += `## Functions (${funcsResult.recordset.length})\n\n`;
                     
@@ -1421,265 +1410,6 @@ function registerGetQueryResultsTool(server, registerWithAlias) {
         registerWithAlias("get_query_results", schema, handler);
     } else {
         server.tool("mcp_get_query_results", schema, handler);
-    }
-}
-
-/**
- * Register the discover tool - provides a database overview
- * @param {object} server - MCP server instance
- * @param {function} registerWithAllAliases - Helper to register with all name variants
- */
-function registerDiscoverTool(server, registerWithAllAliases) {
-    // Define schema with optional random_string parameter (for compatibility)
-    const schema = {
-        random_string: z.string().optional()
-    };
-    
-    const handler = async (args) => {
-        try {
-            // Get tables (limited to 100)
-            const tablesResult = await executeQuery(`
-                SELECT TOP 100
-                        TABLE_SCHEMA,
-                    TABLE_NAME,
-                    TABLE_TYPE
-                    FROM 
-                        INFORMATION_SCHEMA.TABLES
-                ORDER BY 
-                    TABLE_SCHEMA, TABLE_NAME
-            `);
-            
-            // Get stored procedures (limited to 100)
-            const procsResult = await executeQuery(`
-                SELECT TOP 100
-                    ROUTINE_SCHEMA,
-                    ROUTINE_NAME,
-                    ROUTINE_TYPE
-                FROM 
-                    INFORMATION_SCHEMA.ROUTINES
-                    WHERE 
-                    ROUTINE_TYPE = 'PROCEDURE'
-                    ORDER BY
-                    ROUTINE_SCHEMA, ROUTINE_NAME
-            `);
-            
-            // Get functions (limited to 100)
-            const funcsResult = await executeQuery(`
-                SELECT TOP 100
-                    ROUTINE_SCHEMA,
-                    ROUTINE_NAME,
-                    ROUTINE_TYPE
-                FROM 
-                    INFORMATION_SCHEMA.ROUTINES
-                WHERE 
-                    ROUTINE_TYPE = 'FUNCTION'
-                ORDER BY 
-                    ROUTINE_SCHEMA, ROUTINE_NAME
-            `);
-            
-            // Get views (actually included in tables with TABLE_TYPE = 'VIEW')
-            const viewsResult = await executeQuery(`
-                SELECT TOP 100
-                    TABLE_SCHEMA,
-                        TABLE_NAME
-                FROM 
-                    INFORMATION_SCHEMA.VIEWS
-                ORDER BY 
-                    TABLE_SCHEMA, TABLE_NAME
-            `);
-            
-            // Format the output as markdown
-            let markdown = `# Database Overview\n\n`;
-            
-            // Tables section
-            markdown += `## Tables\n\n`;
-            markdown += `| Schema | Table | Type |\n`;
-            markdown += `| ------ | ----- | ---- |\n`;
-            
-            tablesResult.recordset.forEach(table => {
-                markdown += `| ${table.TABLE_SCHEMA} | ${table.TABLE_NAME} | ${table.TABLE_TYPE} |\n`;
-            });
-            
-            if (tablesResult.recordset.length === 100) {
-                markdown += `\n_Showing first 100 tables. There may be more._\n\n`;
-            }
-            
-            // Stored Procedures section
-            markdown += `## Stored Procedures\n\n`;
-            markdown += `| Schema | Procedure |\n`;
-            markdown += `| ------ | --------- |\n`;
-            
-            procsResult.recordset.forEach(proc => {
-                markdown += `| ${proc.ROUTINE_SCHEMA} | ${proc.ROUTINE_NAME} |\n`;
-            });
-            
-            if (procsResult.recordset.length === 100) {
-                markdown += `\n_Showing first 100 procedures. There may be more._\n\n`;
-            }
-            
-            // Functions section
-            markdown += `## Functions\n\n`;
-            markdown += `| Schema | Function |\n`;
-            markdown += `| ------ | -------- |\n`;
-            
-            funcsResult.recordset.forEach(func => {
-                markdown += `| ${func.ROUTINE_SCHEMA} | ${func.ROUTINE_NAME} |\n`;
-            });
-            
-            if (funcsResult.recordset.length === 100) {
-                markdown += `\n_Showing first 100 functions. There may be more._\n\n`;
-            }
-            
-            // Views section
-            markdown += `## Views\n\n`;
-            markdown += `| Schema | View |\n`;
-            markdown += `| ------ | ---- |\n`;
-            
-            viewsResult.recordset.forEach(view => {
-                markdown += `| ${view.TABLE_SCHEMA} | ${view.TABLE_NAME} |\n`;
-            });
-            
-            if (viewsResult.recordset.length === 100) {
-                markdown += `\n_Showing first 100 views. There may be more._\n\n`;
-            }
-            
-            // Add usage examples
-            markdown += `## Usage Examples\n\n`;
-            markdown += `### Get Table Details\n`;
-            markdown += "```javascript\n";
-            markdown += `mcp_table_details({ tableName: "TableName" })\n`;
-            markdown += "```\n\n";
-            
-            markdown += `### Execute Query\n`;
-            markdown += "```javascript\n";
-            markdown += `mcp_execute_query({ sql: "SELECT TOP 10 * FROM TableName" })\n`;
-            markdown += "```\n\n";
-            
-            markdown += `### Get Database Schema\n`;
-            markdown += "```javascript\n";
-            markdown += `mcp_discover_database()\n`;
-            markdown += "```\n";
-            
-            // Return the result in MCP format with both content and structured data
-                return {
-                    content: [{
-                        type: "text",
-                    text: markdown
-                }],
-                result: {
-                    tables: tablesResult.recordset || [],
-                    procedures: procsResult.recordset || [],
-                    functions: funcsResult.recordset || [],
-                    views: viewsResult.recordset || []
-                }
-                };
-            } catch (err) {
-            logger.error(`Error in discover tool: ${err.message}`);
-                
-                return {
-                    content: [{
-                        type: "text",
-                    text: `Error getting database overview: ${formatSqlError(err)}`
-                    }],
-                    isError: true
-                };
-            }
-    };
-    
-    // Register with all aliases
-    if (registerWithAllAliases) {
-        registerWithAllAliases("discover", schema, handler);
-    } else {
-        server.tool("discover", schema, handler);
-    }
-}
-
-/**
- * Register the cursor-guide tool
- * @param {object} server - MCP server instance
- * @param {function} registerWithAllAliases - Helper to register with all name variants
- */
-function registerCursorGuideTool(server, registerWithAllAliases) {
-    const cursorGuideSchema = {
-        random_string: z.string().optional().describe("Dummy parameter for no-parameter tools")
-    };
-    
-    const handler = async (args) => {
-        // Comprehensive guide for cursor-based pagination
-        const guideText = `
-# SQL Cursor-Based Pagination Guide
-
-Cursor-based pagination is an efficient approach for paginating through large datasets, especially when:
-- You need stable pagination through frequently changing data
-- You're handling very large datasets where OFFSET/LIMIT becomes inefficient
-- You want better performance for deep pagination
-
-## Key Concepts
-
-1. **Cursor**: A pointer to a specific item in a dataset, typically based on a unique, indexed field
-2. **Direction**: You can paginate forward (next) or backward (previous)
-3. **Page Size**: The number of items to return per request
-
-## Example Usage
-
-Using cursor-based pagination with our SQL tools:
-
-\`\`\`javascript
-// First page (no cursor)
-const firstPage = await tool.call("mcp_paginated_query", {
-  sql: "SELECT id, name, created_at FROM users ORDER BY created_at DESC",
-  pageSize: 20,
-  cursorField: "created_at"
-});
-
-// Next page (using cursor from previous response)
-const nextPage = await tool.call("mcp_paginated_query", {
-  sql: "SELECT id, name, created_at FROM users ORDER BY created_at DESC",
-  pageSize: 20,
-  cursorField: "created_at",
-  cursor: firstPage.result.pagination.nextCursor,
-  direction: "next"
-});
-
-// Previous page (going back)
-const prevPage = await tool.call("mcp_paginated_query", {
-  sql: "SELECT id, name, created_at FROM users ORDER BY created_at DESC",
-  pageSize: 20,
-  cursorField: "created_at",
-  cursor: nextPage.result.pagination.prevCursor,
-  direction: "prev"
-});
-\`\`\`
-
-## Best Practices
-
-1. **Choose an appropriate cursor field**:
-   - Should be unique or nearly unique (ideally indexed)
-   - Common choices: timestamps, auto-incrementing IDs
-   - Compound cursors can be used for non-unique fields (e.g., "timestamp:id")
-
-2. **Order matters**:
-1. Use indexed fields for the cursor field to improve performance
-2. Include the ORDER BY clause that matches your cursor field
-3. For complex queries, use a subquery to ensure proper ordering`;
-
-        return {
-            content: [{
-                type: "text",
-                text: guideText
-            }],
-            result: {
-                guide: "SQL pagination guide provided successfully"
-            }
-        };
-    };
-
-    if (registerWithAllAliases) {
-        registerWithAllAliases("cursor_guide", cursorGuideSchema, handler);
-    } else {
-        server.tool("cursor_guide", cursorGuideSchema, handler);
-        // Register the guide using native server.tool
-        server.tool("mcp_cursor_guide", cursorGuideSchema, handler);
     }
 }
 
@@ -2376,8 +2106,6 @@ export {
     registerDiscoverTablesTool,
     registerDiscoverDatabaseTool,
     registerGetQueryResultsTool,
-    registerDiscoverTool,
-    registerCursorGuideTool,
     registerPaginatedQueryTool,
     registerQueryStreamerTool
 };

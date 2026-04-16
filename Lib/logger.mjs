@@ -13,11 +13,24 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Configuration
-const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
+const LOG_LEVEL = process.env.LOG_LEVEL || 'warn';
 const LOG_FILE = process.env.LOG_FILE || path.join(__dirname, '../logs/mcp-server.log');
-const LOG_MAX_SIZE = process.env.LOG_MAX_SIZE || '10m';
 const LOG_MAX_FILES = parseInt(process.env.LOG_MAX_FILES) || 5;
 const LOG_FORMAT = process.env.LOG_FORMAT || 'json';
+
+function parseMaxSize(value) {
+    if (typeof value === 'number') return value;
+    const str = String(value).toLowerCase().trim();
+    const match = str.match(/^(\d+)\s*(k|m|g)?b?$/);
+    if (!match) return 5 * 1024 * 1024; // default 5MB
+    const num = parseInt(match[1]);
+    const unit = match[2];
+    if (unit === 'g') return num * 1024 * 1024 * 1024;
+    if (unit === 'm') return num * 1024 * 1024;
+    if (unit === 'k') return num * 1024;
+    return num;
+}
+const LOG_MAX_SIZE = parseMaxSize(process.env.LOG_MAX_SIZE || '5m');
 
 // Create logs directory if it doesn't exist
 const logsDir = path.dirname(LOG_FILE);
@@ -56,10 +69,6 @@ export const logger = winston.createLogger({
     defaultMeta: { service: 'mcp-server' },
     format: logFormats[LOG_FORMAT] || logFormats.json,
     transports: [
-        // Console transport
-        new winston.transports.Console(),
-        
-        // File transport with rotation
         new winston.transports.File({
             filename: LOG_FILE,
             maxsize: LOG_MAX_SIZE,
@@ -107,15 +116,15 @@ process.on('uncaughtException', (error) => {
         stack: error.stack,
         name: error.name
     });
-    
-    // Exit with error
-    process.exit(1);
+    // Do NOT exit -- let the server recover and continue serving other requests.
+    // Only truly fatal errors (e.g. out of memory) will crash the process naturally.
 });
 
 process.on('unhandledRejection', (reason, promise) => {
     logger.error('Unhandled Rejection at:', {
-        promise: promise,
-        reason: reason
+        promise: String(promise),
+        reason: reason instanceof Error ? reason.message : String(reason),
+        stack: reason instanceof Error ? reason.stack : undefined
     });
 });
 

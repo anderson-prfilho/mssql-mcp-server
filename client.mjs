@@ -82,7 +82,9 @@ function enhanceClientMethods() {
     client.readResource = async function(uri) {
         console.log(`📤 Sending request: readResource ${uri}`);
         try {
-            const result = await originalReadResource(uri);
+            // MCP SDK expects an object with uri property, not a string
+            const params = typeof uri === 'string' ? { uri } : uri;
+            const result = await originalReadResource(params);
             debugLog(`📥 Received response: success`, result);
             return result;
         } catch (err) {
@@ -97,7 +99,9 @@ function enhanceClientMethods() {
         console.log(`📤 Sending request: callTool ${name}`);
         debugLog(`   Arguments:`, args);
         try {
-            const result = await originalCallTool(name, args);
+            // MCP SDK expects { name, arguments } object, not separate arguments
+            const params = { name, arguments: args || {} };
+            const result = await originalCallTool(params);
             debugLog(`📥 Received response: success`, result);
             return result;
         } catch (err) {
@@ -154,7 +158,9 @@ function enhanceClientMethods() {
         console.log(`📤 Sending request: getPrompt ${name}`);
         debugLog(`   Arguments:`, args);
         try {
-            const result = await originalGetPrompt(name, args);
+            // MCP SDK expects { name, arguments } object
+            const params = { name, arguments: args || {} };
+            const result = await originalGetPrompt(params);
             debugLog(`📥 Received response: success`, result);
             return result;
         } catch (err) {
@@ -250,18 +256,21 @@ async function listResources() {
     try {
         console.log('\n🔍 Listing available resources...');
         
-        const resources = await client.listResources();
+        const result = await client.listResources();
         
         console.log('\n✅ Resources retrieved successfully!');
         console.log('\n📋 Available Resources:');
         console.log('-------------------------------------------');
         
-        if (resources.length === 0) {
+        // The MCP SDK returns { resources: [...] }, not an array directly
+        const resources = result.resources || result || [];
+        
+        if (!Array.isArray(resources) || resources.length === 0) {
             console.log('No resources available.');
         } else {
             resources.forEach(resource => {
                 console.log(`📑 ${resource.name}: ${resource.description || 'No description'}`);
-                console.log(`   Pattern: ${resource.uriPattern}`);
+                console.log(`   URI: ${resource.uri}`);
                 console.log();
             });
         }
@@ -277,13 +286,16 @@ async function listTools() {
     try {
         console.log('\n🔍 Listing available tools...');
         
-        const tools = await client.listTools();
+        const result = await client.listTools();
         
         console.log('\n✅ Tools retrieved successfully!');
         console.log('\n📋 Available Tools:');
         console.log('-------------------------------------------');
         
-        if (tools.length === 0) {
+        // The MCP SDK returns { tools: [...] }, not an array directly
+        const tools = result.tools || result || [];
+        
+        if (!Array.isArray(tools) || tools.length === 0) {
             console.log('No tools available.');
         } else {
             tools.forEach(tool => {
@@ -303,13 +315,16 @@ async function listPrompts() {
     try {
         console.log('\n🔍 Listing available prompts...');
         
-        const prompts = await client.listPrompts();
+        const result = await client.listPrompts();
         
         console.log('\n✅ Prompts retrieved successfully!');
         console.log('\n📋 Available Prompts:');
         console.log('-------------------------------------------');
         
-        if (prompts.length === 0) {
+        // The MCP SDK returns { prompts: [...] }, not an array directly
+        const prompts = result.prompts || result || [];
+        
+        if (!Array.isArray(prompts) || prompts.length === 0) {
             console.log('No prompts available.');
         } else {
             prompts.forEach(prompt => {
@@ -400,16 +415,31 @@ async function generateQuery(description, tables = []) {
         }
         
         // Get prompt from server
-        const prompt = await client.getPrompt('generate-query', {
+        // MCP prompt arguments must be strings, so convert array to comma-separated string
+        const result = await client.getPrompt('generate-query', {
             description,
-            tables
+            tables: tables.length > 0 ? tables.join(',') : undefined
         });
         
-        // Execute prompt with LLM
-        const result = await client.executePrompt(prompt);
+        console.log('\n✅ Prompt retrieved successfully!');
+        console.log('\n📝 Generated Prompt (for LLM execution):');
+        console.log('-------------------------------------------');
         
-        console.log('\n✅ SQL query generated successfully!');
-        printResult(result);
+        // Display the prompt messages
+        const messages = result.messages || [];
+        messages.forEach((msg, idx) => {
+            console.log(`\n[${msg.role}]:`);
+            if (msg.content?.text) {
+                console.log(msg.content.text);
+            } else if (typeof msg.content === 'string') {
+                console.log(msg.content);
+            } else {
+                console.log(JSON.stringify(msg.content, null, 2));
+            }
+        });
+        
+        console.log('\n-------------------------------------------');
+        console.log('💡 Note: This prompt should be sent to an LLM (like Claude) to generate the actual SQL query.');
     } catch (err) {
         console.error('❌ Error generating query:', err);
     }
@@ -421,7 +451,7 @@ async function executeQuery(sql) {
         console.log('\n🔍 Executing SQL query...');
         console.log(`Query: ${sql}`);
         
-        const result = await client.callTool('execute-query', { sql });
+        const result = await client.callTool('mcp_execute_query', { sql });
         
         console.log('\n✅ SQL query executed successfully!');
         printResult(result);
@@ -435,7 +465,7 @@ async function getTableDetails(tableName) {
     try {
         console.log(`\n🔍 Getting details for table: ${tableName}...`);
         
-        const result = await client.callTool('table-details', { tableName });
+        const result = await client.callTool('mcp_table_details', { tableName });
         
         console.log('\n✅ Table details retrieved successfully!');
         printResult(result);

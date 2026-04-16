@@ -30,9 +30,11 @@ let sqlPool = null;
 
 /**
  * Initialize the SQL connection pool
+ * @param {{ softFail?: boolean }} [options] - If softFail is true, log the error and return false instead of throwing (MCP stdio stays up when SQL is unreachable).
  * @returns {Promise<boolean>} - True if successful
  */
-export async function initializeDbPool() {
+export async function initializeDbPool(options = {}) {
+    const softFail = options.softFail === true;
     try {
         logger.info('Initializing SQL Server connection pool...');
         
@@ -48,6 +50,10 @@ export async function initializeDbPool() {
         return true;
     } catch (err) {
         logger.error(`Failed to initialize SQL Server connection pool: ${err.message}`);
+        sqlPool = null;
+        if (softFail) {
+            return false;
+        }
         throw err;
     }
 }

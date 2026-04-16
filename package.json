@@ -6,8 +6,8 @@
   "type": "module",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node server.mjs",
-    "start:sse": "TRANSPORT=sse node server.mjs",
+    "start": "node --no-warnings server.mjs",
+    "start:sse": "cross-env TRANSPORT=sse PORT=3333 HOST=0.0.0.0 SERVER_URL=http://localhost:3333 node server.mjs",
     "client": "node client.mjs",
     "client:sse": "TRANSPORT=sse node client.mjs",
     "test:http": "node test-server.mjs"
@@ -32,6 +32,7 @@
     "zod": "^3.22.4"
   },
   "devDependencies": {
+    "cross-env": "^10.1.0",
     "eventsource": "^3.0.5",
     "node-fetch": "^2.7.0"
   }

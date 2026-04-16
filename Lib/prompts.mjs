@@ -26,13 +26,17 @@ function registerGenerateQueryPrompt(server) {
         "generate-query",
         { 
             description: z.string().min(1, "Description cannot be empty"),
-            tables: z.array(z.string()).optional(),
-            limit: z.number().optional().default(100)
+            tables: z.string().optional(),  // Comma-separated table names
+            limit: z.string().optional()    // MCP prompt args are strings
         },
-        ({ description, tables, limit = 100 }) => {
+        ({ description, tables, limit }) => {
+            // Parse tables from comma-separated string
+            const tablesList = tables ? tables.split(',').map(t => t.trim()).filter(t => t) : [];
+            const limitNum = limit ? parseInt(limit, 10) : 100;
+            
             // Build a prompt that helps generate a SQL query
-            const tablesContext = tables && tables.length > 0 
-                ? `The query should involve these tables: ${tables.join(', ')}.` 
+            const tablesContext = tablesList.length > 0 
+                ? `The query should involve these tables: ${tablesList.join(', ')}.` 
                 : 'Use appropriate tables from the database.';
             
             return {
@@ -43,7 +47,7 @@ function registerGenerateQueryPrompt(server) {
                         text: `Please help me write a SQL query for Microsoft SQL Server that ${description}. ${tablesContext}
 
 Key requirements:
-1. Use TOP ${limit} for safety or appropriate pagination
+1. Use TOP ${limitNum} for safety or appropriate pagination
 2. Include clear column names (avoid SELECT *)
 3. Add proper JOIN conditions if multiple tables are used
 4. Include informative column aliases for complex expressions
